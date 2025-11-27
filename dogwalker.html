@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SniffMap | 探索狗狗眼中的世界</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+
+    <style>
+        :root {
+            --primary: #FF6B6B; /* 活力红 */
+            --secondary: #4ECDC4; /* 清新绿 */
+            --dark: #2C3E50;
+            --light: #F7F9FC;
+        }
+
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+
+        /* 地图容器 */
+        #map { height: 100vh; width: 100%; z-index: 1; }
+
+        /* 侧边栏/浮动卡片 */
+        .sidebar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 1000;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .logo { font-size: 24px; font-weight: 800; color: var(--dark); margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        .logo i { color: var(--primary); }
+
+        /* 路线卡片样式 */
+        .route-card {
+            background: white;
+            border: 1px solid #eee;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .route-card:hover { transform: translateY(-2px); border-color: var(--secondary); }
+        .route-card.active { border-left: 4px solid var(--secondary); background: #f0fffd; }
+        
+        .route-title { font-weight: 700; color: var(--dark); display: flex; justify-content: space-between; }
+        .route-tags { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; }
+        .tag { font-size: 10px; padding: 3px 8px; border-radius: 20px; font-weight: 600; }
+        
+        .tag.easy { background: #e6fffa; color: #00b894; } /* 适合小狗 */
+        .tag.mod { background: #fff8e1; color: #ffa502; }
+        .tag.social { background: #e3f2fd; color: #0984e3; }
+
+        .route-stats { display: flex; gap: 15px; margin-top: 10px; font-size: 12px; color: #666; }
+
+        /* 底部记录控制条 */
+        .control-bar {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--dark);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 50px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+            z-index: 1000;
+            width: auto;
+        }
+
+        .btn-record {
+            width: 50px;
+            height: 50px;
+            background: var(--primary);
+            border-radius: 50%;
+            border: 4px solid rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .btn-record:active { transform: scale(0.95); }
+
+        .stats-display { text-align: center; }
+        .stats-val { font-size: 18px; font-weight: 700; }
+        .stats-label { font-size: 10px; opacity: 0.7; }
+
+        /* 自定义地图标记样式 */
+        .emoji-icon { font-size: 24px; text-align: center; line-height: 1; text-shadow: 2px 2px 0px #fff; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="logo"><i class="fas fa-dog"></i> SniffMap</div>
+        
+        <h3>家附近推荐 (Nearby)</h3>
+        
+        <div id="route-list">
+            </div>
+
+        <div style="margin-top: 20px; padding: 10px; background: #fff3cd; border-radius: 8px; font-size: 12px; color: #856404;">
+            <i class="fas fa-exclamation-triangle"></i> 
+            <strong>避坑提示：</strong> 北区草坪近期在喷洒除虫剂，请绕行。
+        </div>
+    </div>
+
+    <div class="control-bar">
+        <div class="stats-display">
+            <div class="stats-val" id="timer">00:00</div>
+            <div class="stats-label">时长</div>
+        </div>
+        
+        <div class="btn-record" onclick="toggleRecord()">
+            <i class="fas fa-play" id="play-icon"></i>
+        </div>
+
+        <div class="stats-display">
+            <div class="stats-val">0.00</div>
+            <div class="stats-label">公里</div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // 1. 初始化地图 (设置中心点为示例公园位置)
+        const map = L.map('map').setView([31.224361, 121.469170], 15); // 示例：上海静安区附近
+
+        // 2. 加载地图底图 (OpenStreetMap - 免费且友好)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap & CartoDB',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        // 3. 定义模拟数据 (路线库)
+        const routes = [
+            {
+                id: 1,
+                name: "阳光草坪慢走",
+                desc: "非常适合小型犬，全程平路，无台阶。",
+                distance: "1.2 km",
+                time: "20 min",
+                tags: ["easy", "small-dog"],
+                color: "#00b894", // 绿色代表轻松
+                coords: [
+                    [31.224361, 121.469170],
+                    [31.225000, 121.470000],
+                    [31.226000, 121.468000],
+                    [31.224361, 121.469170]
+                ]
+            },
+            {
+                id: 2,
+                name: "河滨探索步道",
+                desc: "沿河风景好，有专门的狗狗饮水点。",
+                distance: "3.5 km",
+                time: "45 min",
+                tags: ["mod", "scenic"],
+                color: "#0984e3", // 蓝色代表风景
+                coords: [
+                    [31.222000, 121.465000],
+                    [31.223000, 121.462000],
+                    [31.228000, 121.464000],
+                    [31.230000, 121.460000]
+                ]
+            },
+            {
+                id: 3,
+                name: "周末社交聚会圈",
+                desc: "这里有很多柯基和泰迪出没！",
+                distance: "0.8 km",
+                time: "60 min", // 主要是玩，不是走
+                tags: ["easy", "social"],
+                color: "#fdcb6e", // 黄色代表社交
+                coords: [
+                    [31.226500, 121.472000],
+                    [31.227500, 121.473000],
+                    [31.227000, 121.474000],
+                    [31.226000, 121.473000]
+                ]
+            }
+        ];
+
+        // 4. 定义特殊的标记 (POI)
+        const addMarker = (lat, lng, icon, text) => {
+            L.marker([lat, lng], {
+                icon: L.divIcon({
+                    html: `<div class="emoji-icon">${icon}</div>`,
+                    className: 'dummy',
+                    iconSize: [30, 30]
+                })
+            }).addTo(map).bindPopup(text);
+        };
+
+        // 添加一些设施标记
+        addMarker(31.225000, 121.470000, '🚰', '宠物直饮水');
+        addMarker(31.227500, 121.473000, '💩', '宠物便便袋领取点');
+        addMarker(31.223000, 121.462000, '☕', '汪汪友好咖啡馆');
+
+        // 5. 渲染路线列表和地图线条
+        const routeListEl = document.getElementById('route-list');
+        let activePolyline = null;
+
+        routes.forEach(route => {
+            // 渲染列表卡片
+            const card = document.createElement('div');
+            card.className = 'route-card';
+            
+            // 生成标签HTML
+            let tagsHtml = '';
+            if(route.tags.includes('easy')) tagsHtml += `<span class="tag easy"><i class="fas fa-paw"></i> 适合小狗</span>`;
+            if(route.tags.includes('mod')) tagsHtml += `<span class="tag mod">徒步</span>`;
+            if(route.tags.includes('social')) tagsHtml += `<span class="tag social">社交</span>`;
+
+            card.innerHTML = `
+                <div class="route-title">${route.name}</div>
+                <div class="route-tags">${tagsHtml}</div>
+                <div style="font-size:12px; color:#888; margin:5px 0;">${route.desc}</div>
+                <div class="route-stats">
+                    <span><i class="fas fa-road"></i> ${route.distance}</span>
+                    <span><i class="fas fa-clock"></i> ${route.time}</span>
+                </div>
+            `;
+            
+            // 绑定点击事件
+            card.onclick = () => {
+                // 清除之前的选中状态
+                document.querySelectorAll('.route-card').forEach(c => c.classList.remove('active'));
+                card.classList.add('active');
+
+                // 清除之前的地图线条
+                if (activePolyline) map.removeLayer(activePolyline);
+
+                // 绘制新路线
+                activePolyline = L.polyline(route.coords, {
+                    color: route.color,
+                    weight: 5,
+                    opacity: 0.8,
+                    dashArray: route.tags.includes('easy') ? null : '10, 10' // 虚线表示稍微难一点
+                }).addTo(map);
+
+                // 聚焦地图
+                map.fitBounds(activePolyline.getBounds(), {padding: [50, 50]});
+            };
+
+            routeListEl.appendChild(card);
+        });
+
+        // 6. 简单的计时器逻辑 (模拟 Strava 记录)
+        let isRecording = false;
+        let seconds = 0;
+        let timerInterval;
+
+        function toggleRecord() {
+            const btn = document.querySelector('.btn-record');
+            const icon = document.getElementById('play-icon');
+            
+            if (!isRecording) {
+                // 开始记录
+                isRecording = true;
+                icon.className = "fas fa-pause";
+                btn.style.backgroundColor = "#ff9f43";
+                timerInterval = setInterval(() => {
+                    seconds++;
+                    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+                    const s = (seconds % 60).toString().padStart(2, '0');
+                    document.getElementById('timer').innerText = `${m}:${s}`;
+                }, 1000);
+            } else {
+                // 暂停记录
+                isRecording = false;
+                icon.className = "fas fa-play";
+                btn.style.backgroundColor = "var(--primary)";
+                clearInterval(timerInterval);
+                alert("遛狗结束！本次探索已生成 'Sniff Report' 嗅探报告 🐶");
+            }
+        }
+    </script>
+</body>
+</html>
